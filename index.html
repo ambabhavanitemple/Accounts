@@ -527,6 +527,7 @@ table.main-tbl td.adm-col,table.main-tbl th.adm-col{padding-left:8px!important;p
       <button class="btn btn-xls" id="btnXls" style="display:none" onclick="dlExcel()">📊 Export Excel</button>
       <button class="btn btn-save adm-only" id="btnSave" style="display:none" onclick="saveDashboard()">💾 Save Dashboard</button>
       <button class="btn btn-upload adm-only" id="btnMem" onclick="openMembers()">🔑 Member Passwords</button>
+      <button class="btn btn-upload adm-only" id="btnGs" onclick="openGs()">📊 Google Sheet</button>
       <button class="btn btn-jpg" onclick="doLogout()">🔒 Logout</button>
       <input type="file" id="fileInput" accept=".xlsx,.xls" onchange="onFile(event)"/>
     </div>
@@ -1923,7 +1924,7 @@ async function doPublish(msg,rekey,force){
       var d=await encNew(codes,200000);
       PUB.dk=d.dk;PUB.meta={s:d.s,n:d.n,k:d.k};
       var a=await encNew([ADM.pwd],600000);
-      PUB.adm=await encWith(a.dk,{s:a.s,n:a.n,k:a.k},JSON.stringify({o:ADM.o,r:ADM.r,token:ADM.token,members:MEMBERS}));
+      PUB.adm=await encWith(a.dk,{s:a.s,n:a.n,k:a.k},JSON.stringify({o:ADM.o,r:ADM.r,token:ADM.token,members:MEMBERS,gs:ADM.gs||null}));
     }
     var rev=LIVE.rev+1,now=new Date().toISOString();
     var enc=await encWith(PUB.dk,PUB.meta,JSON.stringify({rows:serRows(),chg:serChg(),updated:now}));
@@ -1936,6 +1937,7 @@ async function doPublish(msg,rekey,force){
     await ghPut(JSON.stringify(file),cur?cur.sha:null,msg);
     LIVE.rev=rev;window.LIVE_UPD=now;LIVE.lastErr='';
     setStat('ok');updSub();
+    syncSheet();
     return true;
   }catch(e){
     LIVE.lastErr=(e&&e.message)||String(e);
@@ -2226,6 +2228,43 @@ function delChg(id){
   if(!confirm('Delete this entry?\n\n'+c.date+'  •  '+c.part))return;
   chargesData=chargesData.filter(function(x){return x.id!==id;});
   refreshDash();publish('Delete bank entry: '+c.part);
+}
+
+
+// ───────── Google Sheet auto-sync (admin) ─────────
+// Every time a change is saved to GitHub, the full transactions + bank charges
+// tables are also sent to the Google Apps Script web app linked to your sheet.
+var GS_BUSY=false,GS_AGAIN=false;
+function gsRows(){return allRows.map(function(r){return [r.iso||r.date||'',r.voucher==null?'':r.voucher,r.part,r.inc>0?r.inc:'',r.exp>0?r.exp:'',r.mode||'',r.cheque||'',r.bank||'',r.dep>0?r.dep:'',r.wd>0?r.wd:''];});}
+function gsChg(){return chargesData.map(function(c){return [c.iso||c.date||'',c.part,c.mode,c.herga>0?c.herga:'',c.sbi>0?c.sbi:''];});}
+async function syncSheet(){
+  if(!ADMIN||!ADM||!ADM.gs||!ADM.gs.u)return true;
+  if(GS_BUSY){GS_AGAIN=true;return true;}
+  GS_BUSY=true;var ok=true;
+  try{
+    do{
+      GS_AGAIN=false;
+      var r=await fetch(ADM.gs.u,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({key:ADM.gs.k||'',rows:gsRows(),charges:gsChg()})});
+      var j=await r.json();
+      if(!j.ok)throw new Error(j.error||'Unknown error from Google Sheet');
+    }while(GS_AGAIN);
+    toast('Google Sheet updated');
+  }catch(e){ok=false;toast('Saved to GitHub, but Google Sheet NOT updated: '+((e&&e.message)||e),true);}
+  GS_BUSY=false;return ok;
+}
+async function openGs(){
+  if(!ADMIN)return;
+  var cur=ADM.gs||{};
+  var u=prompt('Paste the Google Apps Script Web App URL.\n(Leave empty and press OK to turn Google Sheet sync OFF.)',cur.u||'');
+  if(u===null)return;
+  u=u.trim();
+  if(!u){ADM.gs=null;await publish('Google Sheet sync off',true);toast('Google Sheet sync turned off');return;}
+  if(!/^https:\/\/script\.google\.com\//.test(u)){alert('This does not look like an Apps Script Web App URL (it should start with https://script.google.com/).');return;}
+  var k=prompt('Enter the secret key you set inside the Apps Script (SECRET).',cur.k||'');
+  if(k===null)return;
+  ADM.gs={u:u,k:k.trim()};
+  await publish('Google Sheet sync settings',true);
+  await syncSheet();
 }
 
 // ───────── Excel export — same layout the dashboard reads back in ─────────
